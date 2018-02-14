@@ -54,7 +54,3 @@ def assemble_car(name, body, tires):
 if __name__ == "__main__":
     name = create_car("test_car")
     print("Car created: {0}".format(name))
-    
-controler = cmds.polyCube(w=1, h=1, d=1);
-cmds.connectAttr(controler+'.rx' , car_grp+'.tx');
-cmds.connectAttr(controler+'.rz' , car_grp+'.tz');
