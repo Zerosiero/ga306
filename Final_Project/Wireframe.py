@@ -1,0 +1,336 @@
+#!/usr/bin/python2
+# -*- coding: cp1252 -*-
+"""
+#-------------------------------------------------------------------------------------------------------------------
+# Name:        RenderWireframe
+# Purpose:     to render wireframe (with AO)
+# Author:      Sanjeev Kumar
+#
+# Created:     10/09/2012
+# Tested on:   Maya 2012, Maya 2013. Report bugs at this email: asksan@live.ca
+# Copyright:   (CC BY-ND 3.0) sanjeev Kumar 2012
+# Licence:     <MIT>
+# ReadMe:      You may use it, in your commercial projects, edit or distribute but you must abide by licence
+#              and keep the credit information preserved, if removed it will be violatoin of the licence.
+#-------------------------------------------------------------------------------------------------------------------
+"""
+__version__= 1.04
+__author__= "Sanjeev Kumar"
+__website__= "www.devilsan.com"
+__contact__= "asksan@live.ca"
+
+import maya.cmds as cmds
+import maya.mel as mel
+from random import randint
+
+from functools import partial
+
+class SetupMentalRay(object):
+
+	  def mrCheck(self):
+		""" checks if the Mental Ray is Loaded
+			if it is not it loads the mental ray.
+		"""
+
+		if not cmds.pluginInfo( "Mayatomr", query = True, loaded = True ):
+			print("Loading Mental Ray ")
+			cmds.loadPlugin( "Mayatomr" )
+			cmds.setAttr('defaultRenderGlobals.currentRenderer', 'mentalRay', type='string')
+		else:
+			print("Mental Ray is Loaded")
+
+		if not cmds.objExists( "miDefaultOptions" ):
+			mel.eval( "miCreateDefaultNodes" )
+		cmds.setAttr('defaultRenderGlobals.ren', 'mentalRay', type='string')
+		if cmds.getAttr("defaultRenderGlobals.ren")=='mentalRay':
+			return True
+		else:
+			print "Please load mental ray manually."
+
+
+class _GUI(object):
+	def __init__(self, AOFlag, loaded=False):
+		self.loaded = loaded
+		self.FLAG = AOFlag
+		self.materials = "lambert1"
+		self.shadEngine = "initialShadingGroup"
+		self.widgets = {}
+		self.winName = "renderWireframe"
+		self.dock = False
+
+		if mel.eval('getApplicationVersionAsFloat') >= 2011:
+			self.dock = True
+		else:
+			self.dock = False
+
+		self.createUI(self.winName, self.dock)
+
+	def update(self, *args):
+		"""
+		Sets the controls to selected object's setting
+		"""
+		try:
+			shapes = cmds.ls(sl=True, o=True, dag=True, s=True)
+			if len(shapes) > 0:
+				self.shadEngine = str(cmds.listConnections(shapes, type ="shadingEngine")[0])
+				 # connected materials
+				self.materials = str(cmds.ls(cmds.listConnections(self.shadEngine), materials = True)[0])
+			# check if connected material is a surface shader or Maya material
+			if cmds.nodeType(self.materials)=='surfaceShader':
+				wireframeColor=cmds.attrColorSliderGrp("wireframeColor", edit= True,  at=self.materials+'.outColor', sb=True )
+				wireColorSlider=cmds.attrColorSliderGrp("wireColorSlider", edit= True,  at=self.shadEngine+'.miContourColor')
+				wirewidthControl=cmds.attrFieldSliderGrp("wirewidthControl", edit= True, at=self.shadEngine+'.miContourWidth' )
+			else:
+				wireframeColor=cmds.attrColorSliderGrp("wireframeColor", edit= True,  at=self.materials+'.color', sb=True )
+				wireColorSlider=cmds.attrColorSliderGrp("wireColorSlider", edit= True, at=self.shadEngine+'.miContourColor')
+				wirewidthControl=cmds.attrFieldSliderGrp("wirewidthControl", edit= True, at=self.shadEngine+'.miContourWidth')
+		except TypeError,UnboundLocalError:
+			pass
+
+	def showSGroup(self, *args):
+		mel.eval('source "dagMenuProc.mel";')
+		if cmds.ls(sl=True):
+			selobj=str(cmds.ls(sl=True)[0])
+			mel.eval('showSG '+selobj+';')
+
+	def createUI(self,winName,dock):
+		##if Maya version is 2011 or above, create a doclable window,
+		##else create a floating window.
+		if dock==True:
+			if cmds.dockControl("%s_dock" % winName, q=True, exists=True):
+				cmds.deleteUI("%s_dock" % winName)
+		else:
+			if cmds.window(winName, q=True, exists=True):
+				cmds.deleteUI(winName)
+		try:
+			###create window
+			self.widgets["window"]=cmds.window(title="Render Wireframe", width=350, mnb=False,mxb=False)
+			self.widgets["mainLayout"]=cmds.columnLayout("mainLayout",width=340,height=400,adj=True)
+			self.widgets["scrolFldRprtr"]=cmds.cmdScrollFieldReporter("scrolFldRprtr",w=350,eac=False,fst="python")
+			cmds.separator(h=5,style="none")
+			cmds.separator(h=5,style="none")
+			self.widgets["Amb_Occlus"]=cmds.text( label='Press CTRL button & hit the shelfbar button to render with AO' )
+			self.widgets["rowColumnLayout"]=cmds.rowColumnLayout(nc=2,cw=[(1,180),(2,140)],columnOffset=[(1,"both",5),(2,"both",2)])
+			self.widgets["aoCheck"]=cmds.checkBox("aoCheck",label='Render with Ambient Occlusion' ,  value=self.FLAG)
+
+
+			self.widgets["mtrlSg_Attrib_Contrls"]= cmds.frameLayout('mtrlSg_Attrib_Contrls',w=340,
+			label='Change Color and Wire Width', borderStyle='in',parent=self.widgets["mainLayout"] )
+			self.widgets["formLayout"] = cmds.formLayout("formLayout",numberOfDivisions=100)
+
+			self.widgets["wireframeColor"]=cmds.attrColorSliderGrp('wireframeColor', sb=True, at='lambert1.outColor', l='Object Color')
+			self.widgets["wireColorSlider"]=cmds.attrColorSliderGrp("wireColorSlider", l='Wire Color', at='initialShadingGroup.miContourColor',
+			ann='the Wires will only show up in Render', sb=False)
+			self.widgets["wirewidthControl"]=cmds.attrFieldSliderGrp("wirewidthControl",at=self.shadEngine+'.miContourWidth',
+			ann='keep value between .5 and .8', min=0.0, max=1.50,l='Wire Width' )
+			self.widgets["antiAliasControl"]=cmds.floatSliderGrp("antiAliasControl", label='Anti Alias', cc=partial(self._change), field=True, minValue=0.01, maxValue=1.0, ann="change anti-alias contrast",  value=cmds.getAttr("miDefaultOptions.contrastR") )
+
+			cmds.setParent('..')
+
+			self.widgets["rowColumnRenLayout"]=cmds.rowColumnLayout( nc=2,cw=[(1,180),(2,140)],columnOffset=[(1,"both",5),(2,"both",2)])
+
+
+			self.widgets["renderSelected"]=cmds.iconTextButton('renderSelbtn', al='left',h=25,image='WireFrameOnShaded.png',ann='Wireframe selected object',
+			style='iconAndTextHorizontal',label='Wireframe Selected',c=self._restrictUiReload)
+
+			self.widgets["renderBtn"]=cmds.iconTextButton('renderBtn', align="right", h=25, width=100 , ann='Click here to take a test Render Preview\n For good quality use high resolution',
+			c=cmds.RenderIntoNewWindow, style='iconAndTextHorizontal', image='menuIconRender.png', label='Render Preview')
+			self.widgets["mainLayout_btns"]=cmds.columnLayout("mainLayout_btns", width=340, height=400)
+			self.widgets["showSGbtn"]=cmds.button(c=self.showSGroup, l="Show Material", ann="Opens Attribute Editor and displays material of the selected object")
+
+			self.widgets["formLayout"]=cmds.formLayout("formLayout", edit=True, af=[("wireframeColor",'top',0), ("wireframeColor",'left', -70)])
+			self.widgets["formLayout"]=cmds.formLayout("formLayout", edit=True, af=[("wireColorSlider",'top',20), ("wireColorSlider",'left', -70)])
+			self.widgets["formLayout"]=cmds.formLayout("formLayout", edit=True, af=[("wirewidthControl",'top',40), ("wirewidthControl",'left', -70)])
+			self.widgets["formLayout"]=cmds.formLayout("formLayout", edit=True, af=[("antiAliasControl",'top',60), ("antiAliasControl",'left', -70)])
+
+			cmds.scriptJob(parent=self.widgets["window"], e=["SelectionChanged",self.update])
+		except RuntimeError, err:
+			   print err
+
+
+		if dock:
+			cmds.dockControl(winName+"_dock", label="Render Wireframe",
+			area="left",allowedArea="left", content=self.widgets["window"])
+			self.loaded=True
+		else:
+			self.loaded=True
+			cmds.showWindow(self.widgets["window"])
+
+	def _change(self, *args):
+		print "args in change function: %s " % args
+		try:
+			value = cmds.floatSliderGrp("antiAliasControl", q=True,v=True)
+			cmds.setAttr("miDefaultOptions.contrastR", value)
+			cmds.setAttr("miDefaultOptions.contrastG", value)
+			cmds.setAttr("miDefaultOptions.contrastB", value)
+			cmds.setAttr("miDefaultOptions.contrastA", value)
+		except RuntimeError, err:
+			   print err
+
+	def _restrictUiReload(self):
+		"""	Restrict reload of window if already loaded while wireframe selected is clicked.
+		"""
+		if cmds.ls(sl=True):
+			aoCheck=cmds.checkBox("aoCheck", q=True, value=True)
+			instCSC=CreateShaderConnect(aoCheck, "surfaceShader" ,self.loaded)
+			instCSC.isRenderable()
+		else:
+			cmds.warning("No object is selected.")
+
+class CreateShaderConnect(SetupMentalRay):
+
+	def __init__(self, *args):
+		"""
+		This Class object instance takes First input as True or False flag that
+		specifes if user pressed CTRL button to render in Wireframe and second
+		argument as the type of shader.
+		"""
+		self.selection=cmds.ls(sl=True, o=True, dag=True, s=True, st=True)
+		self.renderable = ('mesh', 'nurbsSurface', 'subdiv')
+		self.applyToAll = False
+		self.objDic = {}
+		self.message = args[0]
+		if args[1]:
+			self.mtrlType=args[1]
+		else:
+			self.mtrlType="lambert"
+		self.loaded=args[2]
+
+	def listToDict(self, selObjects):
+		"""
+		This function receive list of items and puts them into dictionary.
+		"""
+		return dict(selObjects[i:i+2] for i in range(0, len(selObjects), 2))
+
+	def isRenderable(self):
+		if cmds.getAttr('defaultRenderGlobals.ren') != 'mentalRay':
+		   bI=SetupMentalRay()
+		   var=bI.mrCheck()
+
+		if self.selection:
+			self.objDic = self.listToDict(self.selection)
+		else:
+			self.selection = cmds.ls(sl=True, o=True, dag=True, s=True, st=True)
+			self.objDic = self.listToDict(self.selection)
+
+		if self.objDic:
+			for each in self.objDic:
+				if self.objDic[each] in self.renderable:
+					self.setShaderAttribs(each)
+					print("Selected object "+ str(each) + " is of type "+ str(self.objDic[each]))
+
+	def _createSGMaterial(self, materialType='WireframeMTRL', SHAD='WireframeSG'):
+		"""	Creates a material & Shading Groups and connects
+		"""
+		material = cmds.shadingNode(self.mtrlType, asShader=1, name=materialType)
+		SG = cmds.sets(renderable=1, noSurfaceShader=1, empty=1, name=SHAD)
+		cmds.connectAttr(('%s.outColor' % material),('%s.surfaceShader' % SG),f=1)
+		return material, SG
+
+	def _renderWithAO(self, material):
+		""" This function creates mib_amb_occlusion Shader
+			of mental Ray and connects to WireframeMTRL Color.
+			This method will Render Wireframe with AO.
+		"""
+
+		mentalRay_ambient_occlusion = mel.eval('mrCreateCustomNode -asTexture "" mib_amb_occlusion;')
+		cmds.connectAttr(('%s.outValue' % mentalRay_ambient_occlusion),('%s.outColor' % material), f=1)
+		cmds.setAttr('%s.samples'% mentalRay_ambient_occlusion, 256)
+		cmds.setAttr('%s.spread' % mentalRay_ambient_occlusion, 1)
+		cmds.setAttr('%s.falloff'% mentalRay_ambient_occlusion, 10)
+
+	def _applyWireframeShader(self):
+		"""
+		This function checks if the Wireframe shader already exisit if it
+		exits then it asks the user to either use the old one or create
+		a new, depending on the user input whether new or old, the wireframe
+		material is either created or the old one is connected to the selected
+		renderable object in the scene.
+		"""
+		if "WireframeMTRL" not in cmds.ls(mat=True):
+			material,SG=self._createSGMaterial()
+		else:
+			 if not self.applyToAll:
+				msg = 'The WireframeMTRL with its Shading Group already exist. Do you want to \nuse exsisting? \
+				Yes to create Wireframe material shading group, No to cancel or Apply to All to perform Yes\
+				and apply same material shading group to all.'
+
+				usrResp=cmds.confirmDialog(
+					title='Warning', 
+					message=msg, 
+					ma='center', 
+					button=['Yes', 'No', 'Apply to All'],
+					defaultButton='Yes', 
+					cancelButton='No', 
+					dismissString='No'
+					)
+
+				if usrResp=="Yes":
+					material="WireframeMTRL"
+					SG="WireframeSG"
+				elif usrResp=="Apply to All":
+					self.applyToAll=True
+					material="WireframeMTRL"
+					SG="WireframeSG"
+				else:
+					x= randint(1, 99) #Inclusive
+					material, SG = self._createSGMaterial("WireframeMTRL"+str(x), "WireframeSG"+str(x))
+					print("Created material: WireframeMTRL"+str(x) ,"and Shading Group: WireframeSG"+str(x))
+			 else:
+				material = "WireframeMTRL"
+				SG = "WireframeSG"
+
+		return material, SG
+
+
+	def setShaderAttribs(self, item):
+		"""
+		This function set the attributes on WireframeMTRL and WireframeSG
+		as well as in the MR Features tab in render globals settings.
+		"""
+		material, SG = self._applyWireframeShader()
+
+		cmds.setAttr("%s.miContourWidth" % SG, 0.50)
+
+		if self.message:# i.e. self.message is True if CTRL is pressed to render with AO
+			# sets black wireframe lines on white object
+			cmds.setAttr('%s.miContourColor' % SG, 0, 0, 0, type="double3")
+			# If CTRL button is pressed then Render with AO
+			self._renderWithAO(material) 
+
+		if cmds.listConnections(item)[0]  != 'WireframeSG':
+			cmds.sets(item, e=1, forceElement=SG)
+			cmds.setAttr("%s.miContourEnable" % SG, 1)
+			cmds.setAttr("miDefaultFramebuffer.contourEnable", 1)
+			cmds.setAttr("miDefaultFramebuffer.contourSamples", 6)
+			cmds.setAttr("miDefaultOptions.contourPriData", 1)
+
+		if not self.loaded:
+			self.loaded = True
+			inst = _GUI(self.message, loaded=True)
+
+
+def render(mod=None):
+	"""
+	calls this function to run the script. If ctrl is pressed render is done with
+	Ambient Occlusion
+	"""
+	if mod is None:
+		mod = cmds.getModifiers()
+
+	if mod == 4:
+		FLAG = True
+	else:
+		FLAG = False
+
+	if not cmds.ls(sl=True):
+		loaded = True
+		bI = SetupMentalRay()
+		bI.mrCheck()
+		inst = _GUI(FLAG, loaded=True)
+	else:
+		# something was selected render first then show GUI
+		instCSC = CreateShaderConnect(FLAG, "surfaceShader", False)
+		CreateShaderConnect.isRenderable(instCSC)
+
+
